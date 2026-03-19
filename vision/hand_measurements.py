@@ -321,6 +321,5 @@ while True:
     cv2.imshow("Hand Measurements", img)
     if cv2.waitKey(1) & 0xFF == 27:
         break
-
 cap.release()
 cv2.destroyAllWindows()
