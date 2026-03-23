@@ -243,7 +243,7 @@ def load_and_prepare_dataset():
 def score_phone(phone, user, screen_range):
     score = 0
 
-    # Screen size fit — 30 pts max
+    # Screen size fit — 30 pts max.
     s = phone["Screen_Inch"]
     if screen_range[0] <= s <= screen_range[1]:
         score += 30
