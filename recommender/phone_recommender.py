@@ -1,169 +1,118 @@
-"""
-phone_recommender.py
-────────────────────────────────────────────────────────────────────
-Standalone phone recommender — works with smartphone_dataset_latest.xlsx
-Connect the hand-size output (size_code from hand_measurement.py) to
-`user["preferred_size"]` to get a fully integrated recommendation.
-────────────────────────────────────────────────────────────────────
-"""
+# This file has two jobs:
+# 1. Given a hand size, return what screen size range fits best
+# 2. Given user requirements + hand size, score all phones and return top 5
 
 import pandas as pd
 import os
 
-# ── 1. LOAD DATASET ──────────────────────────────────────────────────────────
-# Put the xlsx in the same folder as this script, or change the path below.
-DATASET_PATH = r"dataset\smartphone_dataset_latest.xlsx"
+# ---------------------------------------------------------
+# FUNCTION 1: Map hand size to screen size range
+# ---------------------------------------------------------
+# Input: "Small", "Medium", or "Large"
+# Output: a tuple like (6.1, 6.5) meaning min and max inches
 
-df = pd.read_excel(DATASET_PATH)
+def get_screen_range(hand_size):
+    if hand_size == "Small":
+        return (5.5, 6.1)
+    elif hand_size == "Medium":
+        return (6.1, 6.5)
+    else:  # Large
+        return (6.5, 6.9)
 
-# ── 2. CLEAN DATASET ─────────────────────────────────────────────────────────
-# Segment column has some stray numeric values — replace them with NaN
-valid_segments = {"Budget", "Mid-Range", "Mid-Premium", "Premium", "Ultra-Premium"}
-df["Segment"] = df["Segment"].apply(lambda x: x if x in valid_segments else None)
 
-# Normalise camera MP to a 1–10 scale (max in dataset = 200 MP)
-df["camera_score"] = (df["Main_Cam_MP"] / df["Main_Cam_MP"].max()) * 10
-
-# Normalise battery to 1–10 scale (max = 7550 mAh)
-df["battery_score"] = (df["Battery_mAh"] / df["Battery_mAh"].max()) * 10
-
-# Normalise refresh rate as gaming proxy (60→4, 90→6, 120→8, 144→9, 165→10)
-refresh_map = {60: 4, 90: 6, 120: 8, 144: 9, 165: 10}
-df["gaming_score"] = df["Refresh_Hz"].map(refresh_map).fillna(5)
-
-# ── 3. USER PREFERENCES ──────────────────────────────────────────────────────
-# ┌─────────────────────────────────────────────────────────────────────┐
-# │  HOW TO CONNECT WITH HAND MEASUREMENT:                              │
-# │  Replace preferred_size with the size_code from hand_measurement.py │
-# │                                                                     │
-# │  Example:                                                           │
-# │    size_code, size_label = classify_hand(ratio, span_ratio)         │
-# │    user["preferred_size"] = size_code                               │
-# └─────────────────────────────────────────────────────────────────────┘
-user = {
-    "budget":         40000,   # INR — uses Current_Price_INR column
-    "camera":         8,       # 1–10: how much you care about camera
-    "battery":        8,       # 1–10: how much you care about battery
-    "gaming":         7,       # 1–10: how much you care about gaming/refresh
-    "preferred_size": "M",     # Hand size code from classifier:
-                               #   XS | S | S+ | M- | M | M+ | L | L+ | XL
-    "brand":          None,    # e.g. "Samsung", "Apple" — or None to ignore
-    "light_phone":    True,    # True = prefer phones under 190g
-    "prefer_5g":      True,    # True = prefer 5G phones
-}
-
-# ── 4. HAND SIZE → SCREEN RANGE MAPPING ──────────────────────────────────────
-# Matches the 9-tier system from hand_measurement.py
-SCREEN_RANGES = {
-    "XS": (4.7,  5.5),
-    "S":  (5.5,  6.0),
-    "S+": (5.8,  6.2),
-    "M-": (6.1,  6.4),
-    "M":  (6.1,  6.5),
-    "M+": (6.4,  6.7),
-    "L":  (6.5,  6.8),
-    "L+": (6.7,  7.0),
-    "XL": (7.0,  8.0),
-}
-
-# Hand_Size_Fit column values in dataset → which size_codes they match
-HAND_FIT_MAP = {
-    "XS":        ["XS"],
-    "Small":     ["S",  "S+"],
-    "Small-Med": ["S+", "M-"],
-    "Medium":    ["M-", "M",  "M+"],
-    "Large":     ["L",  "L+", "XL"],
-}
-
-# ── 5. SCORING FUNCTION ───────────────────────────────────────────────────────
-def get_screen_range(size_code):
-    return SCREEN_RANGES.get(size_code, (6.1, 6.5))
+# ---------------------------------------------------------
+# FUNCTION 2: Score a single phone
+# ---------------------------------------------------------
+# We give each phone a score out of 100 based on how well
+# it matches what the user wants.
+# 
+# phone     = one row from the CSV (one phone's data)
+# user      = dictionary with budget, camera, battery, gaming
+# screen_range = tuple like (6.1, 6.5)
 
 def calculate_score(phone, user, screen_range):
     score = 0
 
-    # (a) Screen size match — highest weight (30 pts)
-    s = phone["Screen_Inch"]
-    if screen_range[0] <= s <= screen_range[1]:
+    # SCREEN SIZE MATCH (30 points)
+    # Does this phone's screen fit the hand size?
+    if screen_range[0] <= phone["screen_size"] <= screen_range[1]:
         score += 30
-    elif abs(s - screen_range[0]) <= 0.3 or abs(s - screen_range[1]) <= 0.3:
-        score += 15   # close enough — partial credit
     else:
-        score += 5
+        score += 5  # small penalty if screen doesn't match
 
-    # (b) Dataset Hand_Size_Fit column cross-check (10 pts bonus)
-    fit_codes = HAND_FIT_MAP.get(phone["Hand_Size_Fit"], [])
-    if user["preferred_size"] in fit_codes:
-        score += 10
-
-    # (c) Budget match (20 pts)
-    price = phone["Current_Price_INR"]
-    if price <= user["budget"]:
+    # BUDGET MATCH (20 points)
+    # Is the phone within budget?
+    if phone["price"] <= user["budget"]:
         score += 20
-    elif price <= user["budget"] * 1.10:   # within 10% over budget
-        score += 10
     else:
-        score -= 10
+        # Penalize more the more over budget it is
+        over_by = phone["price"] - user["budget"]
+        penalty = min(20, over_by / 1000)
+        score -= penalty
 
-    # (d) Camera (15 pts max)
-    score += (phone["camera_score"] / 10) * 15 * (user["camera"] / 10)
+    # CAMERA (15 points)
+    # user["camera"] is 1-10. Phone camera_score is also 1-10.
+    score += (phone["camera_score"] / 10) * 15
 
-    # (e) Battery (15 pts max)
-    score += (phone["battery_score"] / 10) * 15 * (user["battery"] / 10)
+    # BATTERY (15 points)
+    score += (phone["battery_score"] / 10) * 15
 
-    # (f) Gaming / refresh rate (20 pts max)
-    score += (phone["gaming_score"] / 10) * 20 * (user["gaming"] / 10)
-
-    # (g) Weight bonus (5 pts)
-    if user.get("light_phone") and phone["Weight_g"] < 190:
-        score += 5
-
-    # (h) Brand preference (5 pts)
-    if user.get("brand") and phone["Brand"] == user["brand"]:
-        score += 5
-
-    # (i) 5G preference (5 pts)
-    if user.get("prefer_5g") and str(phone["5G"]).strip().lower() == "yes":
-        score += 5
+    # GAMING (20 points)
+    score += (phone["gaming_score"] / 10) * 20
 
     return round(score, 2)
 
-# ── 6. RUN SCORING ────────────────────────────────────────────────────────────
-screen_range = get_screen_range(user["preferred_size"])
 
-df["score"] = df.apply(
-    lambda row: calculate_score(row, user, screen_range), axis=1
-)
+# ---------------------------------------------------------
+# FUNCTION 3: Get top 5 recommendations
+# ---------------------------------------------------------
+# This is the main function the API will call.
+# 
+# hand_size = "Small", "Medium", or "Large"
+# user_prefs = dict with budget, camera, battery, gaming values
+# 
+# Returns a dict with:
+#   - best_phone: name of the #1 phone
+#   - top_5: list of 5 phone names
 
-# ── 7. RESULTS ────────────────────────────────────────────────────────────────
-top_5 = df.sort_values(by="score", ascending=False).head(5).reset_index(drop=True)
+def get_recommendations(hand_size, user_prefs):
+    
+    # Build the path to phones.csv regardless of where we run from
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    csv_path = os.path.join(base_dir, "dataset", "phones.csv")
+    
+    # Load the dataset
+    df = pd.read_csv(csv_path)
 
-display_cols = [
-    "Brand", "Model", "Screen_Inch", "Current_Price_INR",
-    "Main_Cam_MP", "Battery_mAh", "Refresh_Hz",
-    "Weight_g", "Hand_Size_Fit", "5G", "score"
-]
+    # Get the screen range for this hand size
+    screen_range = get_screen_range(hand_size)
 
-print("\n" + "═" * 70)
-print("  📱  TOP 5 PHONE RECOMMENDATIONS")
-print("═" * 70)
-print(f"  Hand Size   : {user['preferred_size']}")
-print(f"  Screen Range: {screen_range[0]}\" – {screen_range[1]}\"")
-print(f"  Budget      : ₹{user['budget']:,}")
-print("═" * 70)
+    # Score every phone in the dataset
+    scores = []
+    for _, row in df.iterrows():
+        s = calculate_score(row, user_prefs, screen_range)
+        scores.append(s)
 
-for i, row in top_5.iterrows():
-    print(f"\n  #{i+1}  {row['Brand']} {row['Model']}")
-    print(f"       Score        : {row['score']}")
-    print(f"       Price        : ₹{row['Current_Price_INR']:,}")
-    print(f"       Screen       : {row['Screen_Inch']}\"  |  Hand Fit: {row['Hand_Size_Fit']}")
-    print(f"       Camera       : {row['Main_Cam_MP']} MP")
-    print(f"       Battery      : {row['Battery_mAh']} mAh")
-    print(f"       Refresh      : {row['Refresh_Hz']} Hz")
-    print(f"       Weight       : {row['Weight_g']} g")
-    print(f"       5G           : {row['5G']}")
+    df["score"] = scores
 
-print("\n" + "═" * 70)
-best = top_5.iloc[0]
-print(f"  ✅  BEST PICK: {best['Brand']} {best['Model']}  (Score: {best['score']})")
-print("═" * 70 + "\n")
+    # Sort by score (highest first) and take top 5
+    top_5_df = df.sort_values(by="score", ascending=False).head(5)
+
+    # Build the result
+    best_phone = top_5_df.iloc[0]["phone_model"]
+    
+    top_5_list = []
+    for _, row in top_5_df.iterrows():
+        top_5_list.append({
+            "phone_model": row["phone_model"],
+            "screen_size": row["screen_size"],
+            "price": row["price"],
+            "score": row["score"]
+        })
+
+    return {
+        "best_phone": best_phone,
+        "top_5": top_5_list,
+        "hand_size": hand_size,
+        "recommended_screen": list(screen_range)
+    }
