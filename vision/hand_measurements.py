@@ -1,5 +1,5 @@
 # hand_measurements.py
-# PURPOSE: From a single image (not webcam), detect the hand
+# PURPOSE: detect the hand from webcam scan and upload photo
 # and return measurements + hand size category.
 # This is the file used by the API.
 
