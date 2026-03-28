@@ -112,12 +112,16 @@ def analyze_hand_from_bytes(image_bytes: bytes):
     
     hand_size = classify_hand_size(ratio)
     
+    # Include raw landmarks so the frontend can draw them
+    landmarks = [{"x": lm.x, "y": lm.y} for lm in lm]
+
     return {
-        "hand_size":    hand_size,           # "Small", "Medium", or "Large"
+        "hand_size":    hand_size,
         "ratio":        round(ratio, 3),
         "hand_length":  round(hand_length, 4),
         "palm_width":   round(palm_width, 4),
-        "finger_span":  round(finger_span, 4)
+        "finger_span":  round(finger_span, 4),
+        "landmarks":    landmarks,        # ← 21 points for drawing
     }
 
 
