@@ -176,6 +176,26 @@ function Results({ results, handData, onRestart }) {
           <span style={S.scoreNum}>{Number(phone.score).toFixed(1)}</span>
         </div>
 
+          {/* Buy now links */}
+<div style={S.buyRow}>
+  
+    href={`https://www.flipkart.com/search?q=${encodeURIComponent(phone.phone_model)}`}
+    target="_blank"
+    rel="noreferrer"
+    style={{ ...S.buyBtn, background: "#f8f4ff", color: "#6366f1", border: "1px solid #c7d2fe" }}
+  >
+    🛒 Flipkart
+  </a>
+  
+    href={`https://www.amazon.in/s?k=${encodeURIComponent(phone.phone_model)}`}
+    target="_blank"
+    rel="noreferrer"
+    style={{ ...S.buyBtn, background: "#fff8f0", color: "#ea580c", border: "1px solid #fed7aa" }}
+  >
+    📦 Amazon
+  </a>
+</div>
+
       </div>
     );
   }
@@ -481,6 +501,12 @@ const S = {
     background: "#fff", fontSize: "16px",
     fontWeight: "600", cursor: "pointer", color: "#374151", marginTop: "8px",
   },
+  buyRow: { display: "flex", gap: "10px", marginTop: "14px" },
+  buyBtn: {
+    flex: 1, padding: "10px", borderRadius: "8px",
+    fontSize: "13px", fontWeight: "600", textAlign: "center",
+    textDecoration: "none", cursor: "pointer",
+},
 };
 
 export default Results;
