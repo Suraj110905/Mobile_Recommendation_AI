@@ -1,7 +1,6 @@
-# hand_measurements.py
-# PURPOSE: detect the hand from webcam scan and upload photo
-# and return measurements + hand size category.
-# This is the file used by the API.
+# vision/hand_measurements.py
+# IMPROVED: Uses 5 normalized ratios + confidence scoring
+# for accurate hand size classification independent of camera distance.
 
 import cv2
 import mediapipe as mp
@@ -9,144 +8,168 @@ import numpy as np
 import math
 import os
 
-# -------------------------------------------------------
-# NEW MEDIAPIPE IMPORTS
-# -------------------------------------------------------
 BaseOptions           = mp.tasks.BaseOptions
 HandLandmarker        = mp.tasks.vision.HandLandmarker
 HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
 VisionRunningMode     = mp.tasks.vision.RunningMode
 
-# -------------------------------------------------------
-# MODEL PATH
-# -------------------------------------------------------
 MODEL_PATH = os.path.join(
     os.path.dirname(__file__), "..", "models", "hand_landmarker.task"
 )
 
-# -------------------------------------------------------
-# CREATE DETECTOR (IMAGE mode — for single photo analysis)
-# -------------------------------------------------------
 options = HandLandmarkerOptions(
     base_options=BaseOptions(model_asset_path=MODEL_PATH),
     running_mode=VisionRunningMode.IMAGE,
-    num_hands=1
+    num_hands=1,
+    min_hand_detection_confidence=0.6,  # higher = more accurate
+    min_hand_presence_confidence=0.6,
+    min_tracking_confidence=0.6,
 )
 
-# -------------------------------------------------------
-# HELPER: Distance between two landmark points
-# -------------------------------------------------------
-# Each landmark has .x and .y as values from 0.0 to 1.0
-# (normalized to image size, so distance is also normalized)
-# We use ratios later so the actual scale doesn't matter
-
 def distance(p1, p2):
+    """Euclidean distance between two landmarks (normalized coords)."""
     return math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2)
 
-# -------------------------------------------------------
-# HELPER: Classify hand size from ratio
-# -------------------------------------------------------
-# ratio = hand_length / palm_width
-# These thresholds were determined by testing
+def compute_ratios(lm):
+    """
+    Compute 5 scale-independent ratios from hand landmarks.
+    All ratios are relative to palm_width so camera distance doesn't matter.
 
-def classify_hand_size(ratio):
-    if ratio < 1.5:
-        return "Small"
-    elif ratio < 1.8:
-        return "Medium"
-    else:
-        return "Large"
+    Landmark reference:
+      0  = Wrist
+      4  = Thumb tip
+      5  = Index MCP (base)
+      8  = Index tip
+      9  = Middle MCP (base)
+      12 = Middle tip
+      17 = Pinky MCP (base)
+      20 = Pinky tip
+    """
+    # Base measurement — palm width (scale reference)
+    palm_width   = distance(lm[5],  lm[17])   # index base → pinky base
+    if palm_width < 0.001:
+        return None  # hand too small / bad detection
 
-# -------------------------------------------------------
-# MAIN FUNCTION: Analyze hand from image bytes
-# -------------------------------------------------------
-# Input:  image as bytes (from file upload or file read)
-# Output: dictionary with hand_size + all measurements
-#         OR None if no hand was detected
-
-def analyze_hand_from_bytes(image_bytes: bytes):
-    
-    # Convert bytes → numpy array → decode as image
-    np_arr  = np.frombuffer(image_bytes, np.uint8)
-    bgr_img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-    
-    if bgr_img is None:
-        return None  # couldn't read the image
-    
-    # MediaPipe needs RGB (OpenCV loads as BGR, so we convert)
-    rgb_img = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
-    
-    # Wrap in MediaPipe Image object
-    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_img)
-    
-    # Run detection
-    with HandLandmarker.create_from_options(options) as detector:
-        result = detector.detect(mp_image)
-    
-    # If no hand found, return None
-    if not result.hand_landmarks:
-        return None
-    
-    # Get the 21 landmarks of the first detected hand
-    # lm is a list of 21 objects, each with .x and .y
-    lm = result.hand_landmarks[0]
-    
-    # -------------------------------------------------------
-    # CALCULATE MEASUREMENTS
-    # -------------------------------------------------------
-    # Landmark index reference:
-    #  0 = Wrist
-    #  4 = Thumb tip
-    #  5 = Index finger base (MCP joint)
-    #  8 = Index finger tip
-    # 12 = Middle finger tip
-    # 17 = Pinky base (MCP joint)
-    # 20 = Pinky tip
-    
-    hand_length  = distance(lm[0],  lm[12])  # wrist → middle tip
-    palm_width   = distance(lm[5],  lm[17])  # index base → pinky base
-    finger_span  = distance(lm[4],  lm[20])  # thumb tip → pinky tip
-    
-    # Use ratio so results don't depend on how close hand is to camera
-    ratio = hand_length / palm_width if palm_width > 0 else 1.5
-    
-    hand_size = classify_hand_size(ratio)
-    
-    # Include raw landmarks so the frontend can draw them
-    landmarks = [{"x": lm.x, "y": lm.y} for lm in lm]
+    # All other measurements normalized by palm_width
+    hand_length  = distance(lm[0],  lm[12])   # wrist → middle tip
+    finger_span  = distance(lm[4],  lm[20])   # thumb tip → pinky tip
+    thumb_length = distance(lm[2],  lm[4])    # thumb base → thumb tip
+    index_length = distance(lm[5],  lm[8])    # index base → index tip
+    pinky_length = distance(lm[17], lm[20])   # pinky base → pinky tip
 
     return {
-        "hand_size":    hand_size,
-        "ratio":        round(ratio, 3),
-        "hand_length":  round(hand_length, 4),
-        "palm_width":   round(palm_width, 4),
-        "finger_span":  round(finger_span, 4),
-        "landmarks":    landmarks,        # ← 21 points for drawing
+        # RATIO 1: Primary size indicator
+        # Larger hands → longer relative to palm width
+        "length_ratio":  hand_length  / palm_width,
+
+        # RATIO 2: Finger spread
+        # Larger hands → wider finger span relative to palm
+        "span_ratio":    finger_span  / palm_width,
+
+        # RATIO 3: Thumb reach
+        # Larger hands → proportionally longer thumb
+        "thumb_ratio":   thumb_length / palm_width,
+
+        # RATIO 4: Index finger proportion
+        "index_ratio":   index_length / palm_width,
+
+        # RATIO 5: Pinky proportion
+        "pinky_ratio":   pinky_length / palm_width,
+
+        # Raw values (for display)
+        "palm_width":    palm_width,
+        "hand_length":   hand_length,
+        "finger_span":   finger_span,
     }
 
+def classify_hand_size(ratios):
+    """
+    Classify hand size using weighted combination of all 5 ratios.
 
-# -------------------------------------------------------
-# TEST: Run this file directly to test with an image file
-# -------------------------------------------------------
-# Usage: python vision/hand_measurements.py
-# (It will try to load a test image from the project root)
+    Thresholds derived from MediaPipe's normalized coordinate system:
+    - Small hands:  length_ratio < 1.45, span_ratio < 1.55
+    - Medium hands: length_ratio 1.45–1.75, span_ratio 1.55–1.85
+    - Large hands:  length_ratio > 1.75, span_ratio > 1.85
 
-if __name__ == "__main__":
-    test_image_path = "test_hand.jpg"  # put any hand photo here
-    
-    if not os.path.exists(test_image_path):
-        print(f"No test image found at '{test_image_path}'")
-        print("Put a hand photo named test_hand.jpg in your project root and run again.")
+    We use a weighted score across all ratios for robustness.
+    """
+    # Weighted score — higher = larger hand
+    # length_ratio and span_ratio are most reliable so get higher weight
+    score = (
+        ratios["length_ratio"] * 0.35 +
+        ratios["span_ratio"]   * 0.30 +
+        ratios["thumb_ratio"]  * 0.15 +
+        ratios["index_ratio"]  * 0.10 +
+        ratios["pinky_ratio"]  * 0.10
+    )
+
+    # Classification thresholds (tuned for normalized coords)
+    if score < 1.45:
+        hand_size   = "Small"
+        confidence  = min(100, int((1.45 - score) / 0.45 * 100 + 60))
+    elif score < 1.75:
+        hand_size   = "Medium"
+        # confidence is highest at center of range (1.60)
+        center_dist = abs(score - 1.60) / 0.15
+        confidence  = min(100, int((1 - center_dist) * 40 + 60))
     else:
-        with open(test_image_path, "rb") as f:
-            result = analyze_hand_from_bytes(f.read())
-        
-        if result:
-            print("Hand detected!")
-            print(f"  Hand size  : {result['hand_size']}")
-            print(f"  Ratio      : {result['ratio']}")
-            print(f"  Hand length: {result['hand_length']}")
-            print(f"  Palm width : {result['palm_width']}")
-            print(f"  Finger span: {result['finger_span']}")
-        else:
-            print("No hand detected. Try a clearer photo with good lighting.")
+        hand_size   = "Large"
+        confidence  = min(100, int((score - 1.75) / 0.45 * 100 + 60))
+
+    return hand_size, max(50, confidence), round(score, 4)
+
+def analyze_hand_from_bytes(image_bytes: bytes):
+    """
+    Main function called by the API.
+    Takes image bytes, returns hand measurements + classification.
+    Returns None if no hand detected.
+    """
+    # Decode image
+    np_arr  = np.frombuffer(image_bytes, np.uint8)
+    bgr_img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    if bgr_img is None:
+        return None
+
+    # Resize for consistency (helps with accuracy)
+    bgr_img = cv2.resize(bgr_img, (640, 480))
+    rgb_img = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_img)
+
+    with HandLandmarker.create_from_options(options) as detector:
+        result = detector.detect(mp_image)
+
+    if not result.hand_landmarks:
+        return None
+
+    lm     = result.hand_landmarks[0]
+    ratios = compute_ratios(lm)
+
+    if ratios is None:
+        return None
+
+    hand_size, confidence, score = classify_hand_size(ratios)
+
+    # Get screen range
+    screen_ranges = {
+        "Small":  (4.7, 6.1),
+        "Medium": (6.1, 6.5),
+        "Large":  (6.5, 6.9),
+    }
+    screen = screen_ranges[hand_size]
+
+    # Landmarks for frontend overlay drawing
+    landmarks = [{"x": lm_pt.x, "y": lm_pt.y} for lm_pt in lm]
+
+    return {
+        "hand_size":             hand_size,
+        "confidence":            confidence,     # % confidence in classification
+        "score":                 score,          # raw weighted score
+        "ratio":                 round(ratios["length_ratio"], 3),
+        "hand_length":           round(ratios["hand_length"],  4),
+        "palm_width":            round(ratios["palm_width"],   4),
+        "finger_span":           round(ratios["finger_span"],  4),
+        "all_ratios":            {k: round(v, 4) for k, v in ratios.items()},
+        "recommended_screen_min": screen[0],
+        "recommended_screen_max": screen[1],
+        "landmarks":             landmarks,
+    }
