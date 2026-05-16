@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import axios from "axios";
 
-const API              = "http://127.0.0.1:8000";
+import API from "../config";
 const SCAN_INTERVAL_MS = 1200;  // scan every 1.2s (faster)
 const HOLD_REQUIRED_MS = 3000;  // 3s hold to confirm
 const HOLD_TICK_MS     = 50;    // smoother countdown
