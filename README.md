@@ -1,1 +1,1 @@
-THIS IS AI RECOMMENDATION PROJECT BASED ON VOICE BASED WORKING AND FUNCTIONALITY WHERE IN GIVING VOICE COMMAND AND WORKING with Automatic feature of self working within the entire system of windows where there
+THIS IS AI RECOMMENDATION PROJECT BASED ON VOICE BASED WORKING AND FUNCTIONALITY WHERE IN GIVING VOICE COMMAND AND WORKING with Automatic feature of self working within the entire system of windows where there all
